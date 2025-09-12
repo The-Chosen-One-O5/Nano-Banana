@@ -22,7 +22,7 @@ pip install -r requirements.txt
 ``` bash
 python main.py
 
-//visit localhost:10000/docs in your browser
+# visit localhost:10000/docs in your browser
 
 ```
 # Usage Guide
