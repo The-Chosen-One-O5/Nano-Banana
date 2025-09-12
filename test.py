@@ -40,39 +40,60 @@ def upload_image_to_uguu(image_url: str) -> str:
     """Download image and upload to uguu.se"""
     logger.info(f"Downloading image from: {image_url}")
     
-    # Download the image
-    response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, timeout=30)
-    response.raise_for_status()
-    
-    # Create file object from image data
-    image_data = io.BytesIO(response.content)
-    
-    # Extract filename from URL or use default
-    filename = image_url.split("/")[-1]
-    if not filename or "." not in filename:
-        filename = f"generated_image_{int(time.time())}.jpg"
-    
-    logger.info(f"⏳ Uploading image to uguu.se as {filename}...")
-    
-    files = {"files[]": (filename, image_data, "image/jpeg")}
-    
-    upload_response = requests.post("https://uguu.se/upload", files=files)
-    
-    if upload_response.status_code != 200:
-        raise Exception(f"Upload failed with status {upload_response.status_code}")
-    
-    data = upload_response.json()
-    
-    if not data.get("success") or not data.get("files"):
-        raise Exception(f"Unexpected upload response: {data}")
-    
-    url = data["files"][0].get("url")
-    
-    if not url:
-        raise Exception("No URL returned from upload")
-    
-    logger.info(f"✅ Upload successful: {url}")
-    return url
+    try:
+        # Download the image
+        response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, timeout=30)
+        response.raise_for_status()
+        
+        # Check if we got image data
+        if not response.content:
+            raise Exception("Empty image data received")
+        
+        # Create file object from image data
+        image_data = io.BytesIO(response.content)
+        
+        # Extract filename from URL or use default
+        filename = image_url.split("/")[-1]
+        if not filename or "." not in filename:
+            filename = f"generated_image_{int(time.time())}.jpg"
+        
+        logger.info(f"⏳ Uploading image to uguu.se as {filename}...")
+        
+        files = {"files[]": (filename, image_data, "image/jpeg")}
+        
+        upload_response = requests.post("https://uguu.se/upload", files=files, timeout=60)
+        
+        if upload_response.status_code != 200:
+            logger.error(f"Upload failed with status {upload_response.status_code}")
+            raise Exception(f"Upload failed with status {upload_response.status_code}")
+        
+        # Check if response has content
+        if not upload_response.text or not upload_response.text.strip():
+            logger.error("Empty response from uguu.se")
+            raise Exception("Empty response from uguu.se")
+        
+        try:
+            data = upload_response.json()
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error from uguu.se. Response: {upload_response.text[:200]}...")
+            raise Exception(f"Invalid JSON response from uguu.se: {str(e)}")
+        
+        if not data.get("success") or not data.get("files"):
+            logger.error(f"Unexpected upload response: {data}")
+            raise Exception(f"Unexpected upload response: {data}")
+        
+        url = data["files"][0].get("url") if data.get("files") and len(data["files"]) > 0 else None
+        
+        if not url:
+            logger.error("No URL returned from upload")
+            raise Exception("No URL returned from upload")
+        
+        logger.info(f"✅ Upload successful: {url}")
+        return url
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Network error during upload: {str(e)}")
+        raise Exception(f"Network error during upload: {str(e)}")
 
 
 def generate_cookie():
@@ -139,16 +160,32 @@ class VisualGPTProvider:
         }
 
         logger.info(f"Submitting prediction request for prompt: {prompt[:50]}... with image: {starting_image}")
-        resp = requests.post(url, json=payload, headers=self.headers_step1, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("code") == 100000 and "session_id" in data.get("data", {}):
-            session_id = data["data"]["session_id"]
-            logger.info(f"Prediction submitted successfully, session_id: {session_id}")
-            return session_id
-        else:
-            logger.error(f"Submission failed: {data.get('message', 'unknown error')}")
-            raise Exception(f"Submission failed: {data.get('message', 'unknown error')}")
+        try:
+            resp = requests.post(url, json=payload, headers=self.headers_step1, timeout=30)
+            resp.raise_for_status()
+            
+            # Check if response has content
+            if not resp.text or not resp.text.strip():
+                logger.error(f"Empty response from VisualGPT API")
+                raise Exception("Empty response from VisualGPT API")
+            
+            try:
+                data = resp.json()
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error. Response content: {resp.text[:200]}...")
+                raise Exception(f"Invalid JSON response from VisualGPT API: {str(e)}")
+            
+            if data.get("code") == 100000 and "session_id" in data.get("data", {}):
+                session_id = data["data"]["session_id"]
+                logger.info(f"Prediction submitted successfully, session_id: {session_id}")
+                return session_id
+            else:
+                logger.error(f"Submission failed: {data.get('message', 'unknown error')}")
+                raise Exception(f"Submission failed: {data.get('message', 'unknown error')}")
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error during prediction submission: {str(e)}")
+            raise Exception(f"Network error: {str(e)}")
 
     def poll_status(self, session_id, timeout=120, interval=5):
         url = f"https://visualgpt.io/api/v1/prediction/get-status?session_id={session_id}"
@@ -156,35 +193,51 @@ class VisualGPTProvider:
         logger.info(f"Starting to poll status for session_id: {session_id}")
         
         while True:
-            headers = self.headers_step2.copy()
-            # update path header so it matches (optional but good replication)
-            headers["path"] = f"/api/v1/prediction/get-status?session_id={session_id}"
-            resp = requests.get(url, headers=headers, timeout=30)
-            resp.raise_for_status()
-            data = resp.json()
+            try:
+                headers = self.headers_step2.copy()
+                # update path header so it matches (optional but good replication)
+                headers["path"] = f"/api/v1/prediction/get-status?session_id={session_id}"
+                resp = requests.get(url, headers=headers, timeout=30)
+                resp.raise_for_status()
+                
+                # Check if response has content
+                if not resp.text or not resp.text.strip():
+                    logger.error(f"Empty response from status API")
+                    raise Exception("Empty response from status API")
+                
+                try:
+                    data = resp.json()
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error in status check. Response: {resp.text[:200]}...")
+                    raise Exception(f"Invalid JSON response from status API: {str(e)}")
 
-            # if server signals session timeout
-            msg = data.get("message", "")
-            if "time" in msg.lower() and "out" in msg.lower():
-                logger.error("Session timed out on server side")
-                raise Exception("Session timed out on server side.")
+                # if server signals session timeout
+                msg = data.get("message", "")
+                if "time" in msg.lower() and "out" in msg.lower():
+                    logger.error("Session timed out on server side")
+                    raise Exception("Session timed out on server side.")
 
-            results = data.get("data", {}).get("results", [])
-            if results:
-                result = results[0]
-                status = result.get("status", "")
-                logger.info(f"Current status: {status}")
-                if status == "succeeded":
-                    img_url = result.get("url", "")
-                    if img_url:
-                        logger.info(f"Image generation succeeded: {img_url}")
-                        return img_url
-                    else:
-                        logger.error("Succeeded status but URL is empty")
-                        raise Exception("Succeeded status but URL is empty.")
-                elif status == "failed":
-                    logger.error("Image generation failed")
-                    raise Exception("Generation failed.")
+                results = data.get("data", {}).get("results", []) if data.get("data") else []
+                if results:
+                    result = results[0]
+                    status = result.get("status", "")
+                    logger.info(f"Current status: {status}")
+                    if status == "succeeded":
+                        img_url = result.get("url", "")
+                        if img_url:
+                            logger.info(f"Image generation succeeded: {img_url}")
+                            return img_url
+                        else:
+                            logger.error("Succeeded status but URL is empty")
+                            raise Exception("Succeeded status but URL is empty.")
+                    elif status == "failed":
+                        logger.error("Image generation failed")
+                        raise Exception("Generation failed.")
+                        
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Network error during status polling: {str(e)}")
+                raise Exception(f"Network error during status check: {str(e)}")
+                
             # Timeout check
             if time.time() - start > timeout:
                 logger.error(f"Timeout waiting for image generation after {timeout}s")
