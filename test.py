@@ -8,6 +8,7 @@ import uuid
 import json
 import logging
 import io
+import random
 
 # Configure logging with timestamps and structured format
 logging.basicConfig(
@@ -35,14 +36,42 @@ class ImageGenerationRequest(BaseModel):
 # --- Config ---
 IMAGE_UPLOAD_URL = "https://wallpaperaccess.com/full/1556608.jpg"
 
+# Proxy list
+PROXIES = [
+    "51.38.117.208:80",
+    "51.68.160.165:80", 
+    "5.104.107.92:80",
+    "85.114.138.129:80",
+    "89.163.214.201:80",
+    "188.42.45.92:80",
+    "188.42.45.200:80",
+    "146.70.176.108:80"
+]
+
+def get_proxy():
+    """Get a random proxy from the list"""
+    if not PROXIES:
+        return None
+    proxy = random.choice(PROXIES)
+    return {
+        "http": f"http://{proxy}",
+        "https": f"http://{proxy}"
+    }
+
 
 def upload_image_to_uguu(image_url: str) -> str:
     """Download image and upload to uguu.se"""
     logger.info(f"Downloading image from: {image_url}")
     
     try:
+        # Get a random proxy
+        proxy = get_proxy()
+        if proxy:
+            logger.info(f"Using proxy for image download: {proxy['http']}")
+        
         # Download the image
-        response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, timeout=30)
+        response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, 
+                              timeout=30, proxies=proxy)
         response.raise_for_status()
         
         # Check if we got image data
@@ -61,7 +90,13 @@ def upload_image_to_uguu(image_url: str) -> str:
         
         files = {"files[]": (filename, image_data, "image/jpeg")}
         
-        upload_response = requests.post("https://uguu.se/upload", files=files, timeout=60)
+        # Get a random proxy for upload
+        proxy = get_proxy()
+        if proxy:
+            logger.info(f"Using proxy for uguu.se upload: {proxy['http']}")
+        
+        upload_response = requests.post("https://uguu.se/upload", files=files, 
+                                      timeout=60, proxies=proxy)
         
         if upload_response.status_code != 200:
             logger.error(f"Upload failed with status {upload_response.status_code}")
@@ -160,32 +195,52 @@ class VisualGPTProvider:
         }
 
         logger.info(f"Submitting prediction request for prompt: {prompt[:50]}... with image: {starting_image}")
-        try:
-            resp = requests.post(url, json=payload, headers=self.headers_step1, timeout=30)
-            resp.raise_for_status()
-            
-            # Check if response has content
-            if not resp.text or not resp.text.strip():
-                logger.error(f"Empty response from VisualGPT API")
-                raise Exception("Empty response from VisualGPT API")
-            
+        
+        # Try with different proxies if one fails
+        for attempt in range(3):  # Try up to 3 times
             try:
-                data = resp.json()
-            except json.JSONDecodeError as e:
-                logger.error(f"JSON decode error. Response content: {resp.text[:200]}...")
-                raise Exception(f"Invalid JSON response from VisualGPT API: {str(e)}")
-            
-            if data.get("code") == 100000 and "session_id" in data.get("data", {}):
-                session_id = data["data"]["session_id"]
-                logger.info(f"Prediction submitted successfully, session_id: {session_id}")
-                return session_id
-            else:
-                logger.error(f"Submission failed: {data.get('message', 'unknown error')}")
-                raise Exception(f"Submission failed: {data.get('message', 'unknown error')}")
+                # Get a random proxy
+                proxy = get_proxy()
+                if proxy:
+                    logger.info(f"Attempt {attempt + 1}: Using proxy: {proxy['http']}")
+                else:
+                    logger.info(f"Attempt {attempt + 1}: No proxy available, using direct connection")
                 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Network error during prediction submission: {str(e)}")
-            raise Exception(f"Network error: {str(e)}")
+                resp = requests.post(url, json=payload, headers=self.headers_step1, 
+                                   timeout=30, proxies=proxy)
+                resp.raise_for_status()
+                
+                # Check if response has content
+                if not resp.text or not resp.text.strip():
+                    logger.error(f"Empty response from VisualGPT API")
+                    if attempt < 2:  # Try again with different proxy
+                        continue
+                    raise Exception("Empty response from VisualGPT API")
+                
+                try:
+                    data = resp.json()
+                    break  # Success, exit retry loop
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error. Response content: {resp.text[:200]}...")
+                    if attempt < 2:  # Try again with different proxy
+                        logger.info("Retrying with different proxy...")
+                        continue
+                    raise Exception(f"Invalid JSON response from VisualGPT API: {str(e)}")
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Network error during prediction submission (attempt {attempt + 1}): {str(e)}")
+                if attempt < 2:  # Try again with different proxy
+                    logger.info("Retrying with different proxy...")
+                    continue
+                raise Exception(f"Network error: {str(e)}")
+            
+        if data.get("code") == 100000 and "session_id" in data.get("data", {}):
+            session_id = data["data"]["session_id"]
+            logger.info(f"Prediction submitted successfully, session_id: {session_id}")
+            return session_id
+        else:
+            logger.error(f"Submission failed: {data.get('message', 'unknown error')}")
+            raise Exception(f"Submission failed: {data.get('message', 'unknown error')}")
 
     def poll_status(self, session_id, timeout=120, interval=5):
         url = f"https://visualgpt.io/api/v1/prediction/get-status?session_id={session_id}"
@@ -194,10 +249,15 @@ class VisualGPTProvider:
         
         while True:
             try:
+                # Get a random proxy
+                proxy = get_proxy()
+                if proxy:
+                    logger.info(f"Using proxy for status check: {proxy['http']}")
+                
                 headers = self.headers_step2.copy()
                 # update path header so it matches (optional but good replication)
                 headers["path"] = f"/api/v1/prediction/get-status?session_id={session_id}"
-                resp = requests.get(url, headers=headers, timeout=30)
+                resp = requests.get(url, headers=headers, timeout=30, proxies=proxy)
                 resp.raise_for_status()
                 
                 # Check if response has content
