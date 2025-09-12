@@ -1,4 +1,5 @@
 **This is a Unofficial FastAPI Based Nano Banana 🍌  API**
+
 Use it without abusing the services 
 
 # Usage
@@ -36,5 +37,4 @@ your prompt or give the url of image
 
 # Donate
 
-If you loved the project plz donate me for more awesome projects 
-buymeacoffee.com/kenosis
+If you loved the project plz donate me for more awesome projects buymeacoffee.com/kenosis
