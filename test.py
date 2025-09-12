@@ -1,4 +1,3 @@
-from fastapi import FastAPI, HTTPException, Request, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -8,7 +7,6 @@ import uuid
 import json
 import logging
 import io
-import random
 
 # Configure logging with timestamps and structured format
 logging.basicConfig(
@@ -36,99 +34,44 @@ class ImageGenerationRequest(BaseModel):
 # --- Config ---
 IMAGE_UPLOAD_URL = "https://wallpaperaccess.com/full/1556608.jpg"
 
-# Proxy list
-PROXIES = [
-    "51.38.117.208:80",
-    "51.68.160.165:80", 
-    "5.104.107.92:80",
-    "85.114.138.129:80",
-    "89.163.214.201:80",
-    "188.42.45.92:80",
-    "188.42.45.200:80",
-    "146.70.176.108:80"
-]
-
-def get_proxy():
-    """Get a random proxy from the list"""
-    if not PROXIES:
-        return None
-    proxy = random.choice(PROXIES)
-    return {
-        "http": f"http://{proxy}",
-        "https": f"http://{proxy}"
-    }
-
 
 def upload_image_to_uguu(image_url: str) -> str:
     """Download image and upload to uguu.se"""
     logger.info(f"Downloading image from: {image_url}")
     
-    try:
-        # Get a random proxy
-        proxy = get_proxy()
-        if proxy:
-            logger.info(f"Using proxy for image download: {proxy['http']}")
-        
-        # Download the image
-        response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, 
-                              timeout=30, proxies=proxy)
-        response.raise_for_status()
-        
-        # Check if we got image data
-        if not response.content:
-            raise Exception("Empty image data received")
-        
-        # Create file object from image data
-        image_data = io.BytesIO(response.content)
-        
-        # Extract filename from URL or use default
-        filename = image_url.split("/")[-1]
-        if not filename or "." not in filename:
-            filename = f"generated_image_{int(time.time())}.jpg"
-        
-        logger.info(f"⏳ Uploading image to uguu.se as {filename}...")
-        
-        files = {"files[]": (filename, image_data, "image/jpeg")}
-        
-        # Get a random proxy for upload
-        proxy = get_proxy()
-        if proxy:
-            logger.info(f"Using proxy for uguu.se upload: {proxy['http']}")
-        
-        upload_response = requests.post("https://uguu.se/upload", files=files, 
-                                      timeout=60, proxies=proxy)
-        
-        if upload_response.status_code != 200:
-            logger.error(f"Upload failed with status {upload_response.status_code}")
-            raise Exception(f"Upload failed with status {upload_response.status_code}")
-        
-        # Check if response has content
-        if not upload_response.text or not upload_response.text.strip():
-            logger.error("Empty response from uguu.se")
-            raise Exception("Empty response from uguu.se")
-        
-        try:
-            data = upload_response.json()
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error from uguu.se. Response: {upload_response.text[:200]}...")
-            raise Exception(f"Invalid JSON response from uguu.se: {str(e)}")
-        
-        if not data.get("success") or not data.get("files"):
-            logger.error(f"Unexpected upload response: {data}")
-            raise Exception(f"Unexpected upload response: {data}")
-        
-        url = data["files"][0].get("url") if data.get("files") and len(data["files"]) > 0 else None
-        
-        if not url:
-            logger.error("No URL returned from upload")
-            raise Exception("No URL returned from upload")
-        
-        logger.info(f"✅ Upload successful: {url}")
-        return url
-        
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Network error during upload: {str(e)}")
-        raise Exception(f"Network error during upload: {str(e)}")
+    # Download the image
+    response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, timeout=30)
+    response.raise_for_status()
+    
+    # Create file object from image data
+    image_data = io.BytesIO(response.content)
+    
+    # Extract filename from URL or use default
+    filename = image_url.split("/")[-1]
+    if not filename or "." not in filename:
+        filename = f"generated_image_{int(time.time())}.jpg"
+    
+    logger.info(f"⏳ Uploading image to uguu.se as {filename}...")
+    
+    files = {"files[]": (filename, image_data, "image/jpeg")}
+    
+    upload_response = requests.post("https://uguu.se/upload", files=files)
+    
+    if upload_response.status_code != 200:
+        raise Exception(f"Upload failed with status {upload_response.status_code}")
+    
+    data = upload_response.json()
+    
+    if not data.get("success") or not data.get("files"):
+        raise Exception(f"Unexpected upload response: {data}")
+    
+    url = data["files"][0].get("url")
+    
+    if not url:
+        raise Exception("No URL returned from upload")
+    
+    logger.info(f"✅ Upload successful: {url}")
+    return url
 
 
 def generate_cookie():
@@ -195,45 +138,9 @@ class VisualGPTProvider:
         }
 
         logger.info(f"Submitting prediction request for prompt: {prompt[:50]}... with image: {starting_image}")
-        
-        # Try with different proxies if one fails
-        for attempt in range(3):  # Try up to 3 times
-            try:
-                # Get a random proxy
-                proxy = get_proxy()
-                if proxy:
-                    logger.info(f"Attempt {attempt + 1}: Using proxy: {proxy['http']}")
-                else:
-                    logger.info(f"Attempt {attempt + 1}: No proxy available, using direct connection")
-                
-                resp = requests.post(url, json=payload, headers=self.headers_step1, 
-                                   timeout=30, proxies=proxy)
-                resp.raise_for_status()
-                
-                # Check if response has content
-                if not resp.text or not resp.text.strip():
-                    logger.error(f"Empty response from VisualGPT API")
-                    if attempt < 2:  # Try again with different proxy
-                        continue
-                    raise Exception("Empty response from VisualGPT API")
-                
-                try:
-                    data = resp.json()
-                    break  # Success, exit retry loop
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error. Response content: {resp.text[:200]}...")
-                    if attempt < 2:  # Try again with different proxy
-                        logger.info("Retrying with different proxy...")
-                        continue
-                    raise Exception(f"Invalid JSON response from VisualGPT API: {str(e)}")
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Network error during prediction submission (attempt {attempt + 1}): {str(e)}")
-                if attempt < 2:  # Try again with different proxy
-                    logger.info("Retrying with different proxy...")
-                    continue
-                raise Exception(f"Network error: {str(e)}")
-            
+        resp = requests.post(url, json=payload, headers=self.headers_step1, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
         if data.get("code") == 100000 and "session_id" in data.get("data", {}):
             session_id = data["data"]["session_id"]
             logger.info(f"Prediction submitted successfully, session_id: {session_id}")
@@ -248,56 +155,35 @@ class VisualGPTProvider:
         logger.info(f"Starting to poll status for session_id: {session_id}")
         
         while True:
-            try:
-                # Get a random proxy
-                proxy = get_proxy()
-                if proxy:
-                    logger.info(f"Using proxy for status check: {proxy['http']}")
-                
-                headers = self.headers_step2.copy()
-                # update path header so it matches (optional but good replication)
-                headers["path"] = f"/api/v1/prediction/get-status?session_id={session_id}"
-                resp = requests.get(url, headers=headers, timeout=30, proxies=proxy)
-                resp.raise_for_status()
-                
-                # Check if response has content
-                if not resp.text or not resp.text.strip():
-                    logger.error(f"Empty response from status API")
-                    raise Exception("Empty response from status API")
-                
-                try:
-                    data = resp.json()
-                except json.JSONDecodeError as e:
-                    logger.error(f"JSON decode error in status check. Response: {resp.text[:200]}...")
-                    raise Exception(f"Invalid JSON response from status API: {str(e)}")
+            headers = self.headers_step2.copy()
+            # update path header so it matches (optional but good replication)
+            headers["path"] = f"/api/v1/prediction/get-status?session_id={session_id}"
+            resp = requests.get(url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            data = resp.json()
 
-                # if server signals session timeout
-                msg = data.get("message", "")
-                if "time" in msg.lower() and "out" in msg.lower():
-                    logger.error("Session timed out on server side")
-                    raise Exception("Session timed out on server side.")
+            # if server signals session timeout
+            msg = data.get("message", "")
+            if "time" in msg.lower() and "out" in msg.lower():
+                logger.error("Session timed out on server side")
+                raise Exception("Session timed out on server side.")
 
-                results = data.get("data", {}).get("results", []) if data.get("data") else []
-                if results:
-                    result = results[0]
-                    status = result.get("status", "")
-                    logger.info(f"Current status: {status}")
-                    if status == "succeeded":
-                        img_url = result.get("url", "")
-                        if img_url:
-                            logger.info(f"Image generation succeeded: {img_url}")
-                            return img_url
-                        else:
-                            logger.error("Succeeded status but URL is empty")
-                            raise Exception("Succeeded status but URL is empty.")
-                    elif status == "failed":
-                        logger.error("Image generation failed")
-                        raise Exception("Generation failed.")
-                        
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Network error during status polling: {str(e)}")
-                raise Exception(f"Network error during status check: {str(e)}")
-                
+            results = data.get("data", {}).get("results", [])
+            if results:
+                result = results[0]
+                status = result.get("status", "")
+                logger.info(f"Current status: {status}")
+                if status == "succeeded":
+                    img_url = result.get("url", "")
+                    if img_url:
+                        logger.info(f"Image generation succeeded: {img_url}")
+                        return img_url
+                    else:
+                        logger.error("Succeeded status but URL is empty")
+                        raise Exception("Succeeded status but URL is empty.")
+                elif status == "failed":
+                    logger.error("Image generation failed")
+                    raise Exception("Generation failed.")
             # Timeout check
             if time.time() - start > timeout:
                 logger.error(f"Timeout waiting for image generation after {timeout}s")
