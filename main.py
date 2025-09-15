@@ -208,6 +208,7 @@ class VisualGPTProvider:
             logger.error(f"Image generation failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
+
 # --- App Init ---
 app = FastAPI(
     title="🍌 Nano Banana Image Generation API",
