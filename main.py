@@ -1,3 +1,4 @@
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -296,8 +297,3 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "service": "Nano Banana Image Generation API"}
-
-if __name__ == "__main__":
-    import uvicorn
-    logger.info("Starting Nano Banana Image Generation API server on port 10000")
-    uvicorn.run("test:app", host="0.0.0.0", port=10000, reload=True)
