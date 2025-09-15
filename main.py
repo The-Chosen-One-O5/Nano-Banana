@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class ImageGenerationRequest(BaseModel):
     prompt: str
     image_url: Optional[str] = None  # Starting image URL for editing
-
+    
     class Config:
         schema_extra = {
             "example": {
@@ -39,38 +39,38 @@ IMAGE_UPLOAD_URL = "https://wallpaperaccess.com/full/1556608.jpg"
 def upload_image_to_uguu(image_url: str) -> str:
     """Download image and upload to uguu.se"""
     logger.info(f"Downloading image from: {image_url}")
-
+    
     # Download the image
     response = requests.get(image_url, headers={"Referer": "https://visualgpt.io"}, timeout=30)
     response.raise_for_status()
-
+    
     # Create file object from image data
     image_data = io.BytesIO(response.content)
-
+    
     # Extract filename from URL or use default
     filename = image_url.split("/")[-1]
     if not filename or "." not in filename:
         filename = f"generated_image_{int(time.time())}.jpg"
-
+    
     logger.info(f"⏳ Uploading image to uguu.se as {filename}...")
-
+    
     files = {"files[]": (filename, image_data, "image/jpeg")}
-
+    
     upload_response = requests.post("https://uguu.se/upload", files=files)
-
+    
     if upload_response.status_code != 200:
         raise Exception(f"Upload failed with status {upload_response.status_code}")
-
+    
     data = upload_response.json()
-
+    
     if not data.get("success") or not data.get("files"):
         raise Exception(f"Unexpected upload response: {data}")
-
+    
     url = data["files"][0].get("url")
-
+    
     if not url:
         raise Exception("No URL returned from upload")
-
+    
     logger.info(f"✅ Upload successful: {url}")
     return url
 
@@ -106,7 +106,7 @@ class VisualGPTProvider:
             "sec-ch-ua-platform": '"Windows"',
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0"
         }
-
+        
         self.headers_step2 = {
             "authority": "visualgpt.io",
             "method": "GET",
@@ -125,10 +125,10 @@ class VisualGPTProvider:
 
     def submit_prediction(self, prompt, image_url=None):
         url = "https://visualgpt.io/api/v1/prediction/handle"
-
+        
         # Use provided image_url or default
         starting_image = image_url if image_url and image_url.strip() else IMAGE_UPLOAD_URL
-
+        
         payload = {
             "image_urls": [starting_image],
             "type": 61,
@@ -154,7 +154,7 @@ class VisualGPTProvider:
         url = f"https://visualgpt.io/api/v1/prediction/get-status?session_id={session_id}"
         start = time.time()
         logger.info(f"Starting to poll status for session_id: {session_id}")
-
+        
         while True:
             headers = self.headers_step2.copy()
             # update path header so it matches (optional but good replication)
@@ -199,7 +199,7 @@ class VisualGPTProvider:
             logger.info(f"Starting image generation for prompt: {prompt[:50]}... with starting_image: {starting_image}")
             session_id = self.submit_prediction(prompt, starting_image)
             original_image_url = self.poll_status(session_id)
-
+            
             # Upload to uguu.se and return the new URL
             uploaded_url = upload_image_to_uguu(original_image_url)
             logger.info(f"Image generation and upload completed successfully")
@@ -208,19 +208,18 @@ class VisualGPTProvider:
             logger.error(f"Image generation failed: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}")
 
-
 # --- App Init ---
 app = FastAPI(
-    title="🍌 Nano Banana Image Generation API",
+    title="🍌 Nano Banana Image Generation API", 
     version="1.0.0",
     description="""A powerful image generation API that creates images from text prompts and uploads them to uguu.se.
-
+    
 ## Features
 - Generate images from text descriptions
 - Optional starting image for editing
 - Automatic upload to uguu.se for easy sharing
 - Real-time generation status with structured logging
-
+    
 ## Usage
 1. Use the `/v1/image/generations` endpoint for programmatic access
 2. Check `/health` for service status
@@ -233,32 +232,32 @@ provider = VisualGPTProvider()
 
 
 # --- Routes ---
-@app.post("/v1/image/generations",
+@app.post("/v1/image/generations", 
          summary="Generate Image",
          description="Generate an image based on a text prompt and upload it to uguu.se. Optionally provide a starting image URL for editing.",
          response_description="Returns the uploaded image URL from uguu.se")
 async def create_image(request: ImageGenerationRequest):
     """Generate an image based on a text prompt and upload to uguu.se.
-
+    
     - **prompt**: The text description of the image you want to generate
     - **image_url**: Optional starting image URL for editing (uses default if not provided)
-
+    
     Returns the uploaded image URL from uguu.se instead of the original generation URL.
     """
     logger.info(f"Received image generation request: prompt='{request.prompt[:50]}...', image_url='{request.image_url}'")
-
+    
     if not request.prompt or not request.prompt.strip():
         logger.error("Empty prompt provided")
         raise HTTPException(status_code=400, detail="Prompt cannot be empty")
-
+    
     try:
         uploaded_url = await provider.generate_image(
-            request.prompt,
+            request.prompt, 
             request.image_url if request.image_url and request.image_url.strip() else None
         )
-
+        
         created_ts = int(time.time())
-
+        
         response_payload = {
             "created": created_ts,
             "data": [
@@ -268,10 +267,10 @@ async def create_image(request: ImageGenerationRequest):
                 }
             ]
         }
-
+        
         logger.info(f"Successfully generated and uploaded image, returning uguu.se URL")
         return JSONResponse(content=response_payload)
-
+        
     except HTTPException:
         raise
     except Exception as e:
@@ -283,7 +282,7 @@ async def create_image(request: ImageGenerationRequest):
 async def root():
     """Get API information"""
     return {
-        "message": "🍌 Nano Banana Image Generation API",
+        "message": "🍌 Nano Banana Image Generation API", 
         "version": "1.0.0",
         "description": "Generate images from text prompts and upload to uguu.se",
         "endpoints": {
